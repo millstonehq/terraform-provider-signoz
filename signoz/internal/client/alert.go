@@ -19,6 +19,9 @@ const (
 
 // GetAlert - Returns specific alert.
 func (c *Client) GetAlert(ctx context.Context, alertID string) (*model.Alert, error) {
+	if alertID == "" {
+		return nil, fmt.Errorf("alert ID is empty, cannot read alert")
+	}
 	url, err := url.JoinPath(c.hostURL.String(), alertPath, alertID)
 	if err != nil {
 		return nil, err
@@ -110,6 +113,9 @@ func (c *Client) CreateAlert(ctx context.Context, alertPayload *model.Alert) (*m
 
 // UpdateAlert - Updates an existing alert.
 func (c *Client) UpdateAlert(ctx context.Context, alertID string, alertPayload *model.Alert) error {
+	if alertID == "" {
+		return fmt.Errorf("alert ID is empty, cannot update alert")
+	}
 	alertPayload.SetSourceIfEmpty(c.hostURL.String())
 	rb, err := marshalJSONNoEscape(alertPayload)
 	if err != nil {
@@ -152,6 +158,9 @@ func (c *Client) UpdateAlert(ctx context.Context, alertID string, alertPayload *
 
 // DeleteAlert - Deletes an existing alert.
 func (c *Client) DeleteAlert(ctx context.Context, alertID string) error {
+	if alertID == "" {
+		return fmt.Errorf("alert ID is empty, cannot delete alert")
+	}
 	url, err := url.JoinPath(c.hostURL.String(), alertPath, alertID)
 	if err != nil {
 		return err
