@@ -267,12 +267,9 @@ func (r *alertResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 					jsonNormalize(),
 				},
 			},
-			// ID is computed by default but can be optionally provided to adopt
-			// an existing SigNoz alert (e.g., via Crossplane external-name).
 			attr.ID: schema.StringAttribute{
-				Optional:    true,
 				Computed:    true,
-				Description: "Unique ID for the alert. If provided during creation, the provider will adopt the existing alert instead of creating a new one.",
+				Description: "Unique ID for the alert, assigned by SigNoz.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -352,42 +349,18 @@ func (r *alertResource) Create(ctx context.Context, req resource.CreateRequest, 
 	alertPayload.SetLabels(plan.Labels, plan.Severity)
 	alertPayload.SetPreferredChannels(plan.PreferredChannels)
 
-	var alert *model.Alert
+	tflog.Debug(ctx, "Creating alert", map[string]any{"alert": alertPayload})
 
-	// If an ID is provided (e.g., from Crossplane external-name), adopt the
-	// existing alert by updating it instead of creating a new one.
-	if !plan.ID.IsNull() && !plan.ID.IsUnknown() && plan.ID.ValueString() != "" {
-		existingID := plan.ID.ValueString()
-		tflog.Debug(ctx, "Adopting existing alert", map[string]any{"id": existingID})
-
-		err = r.client.UpdateAlert(ctx, existingID, alertPayload)
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error adopting alert",
-				fmt.Sprintf("Could not adopt alert %q, unexpected error: %s", existingID, err.Error()),
-			)
-			return
-		}
-
-		alert, err = r.client.GetAlert(ctx, existingID)
-		if err != nil {
-			addErr(&resp.Diagnostics, err, operationCreate, SigNozAlert)
-			return
-		}
-	} else {
-		tflog.Debug(ctx, "Creating alert", map[string]any{"alert": alertPayload})
-
-		alert, err = r.client.CreateAlert(ctx, alertPayload)
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error creating alert",
-				"Could not create alert, unexpected error: "+err.Error(),
-			)
-			return
-		}
-
-		tflog.Debug(ctx, "Created alert", map[string]any{"alert": alert})
+	alert, err := r.client.CreateAlert(ctx, alertPayload)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error creating alert",
+			"Could not create alert, unexpected error: "+err.Error(),
+		)
+		return
 	}
+
+	tflog.Debug(ctx, "Created alert", map[string]any{"alert": alert})
 
 	// Map response to schema and populate Computed attributes.
 	plan.ID = types.StringValue(alert.ID)

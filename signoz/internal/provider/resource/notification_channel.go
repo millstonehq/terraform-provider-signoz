@@ -129,9 +129,8 @@ func (r *notificationChannelResource) Schema(_ context.Context, _ resource.Schem
 				Description: "Type of the notification channel (derived from config block).",
 			},
 			attr.ID: schema.StringAttribute{
-				Optional:    true,
 				Computed:    true,
-				Description: "Unique ID for the notification channel. If provided during creation, the provider will adopt the existing channel.",
+				Description: "Unique ID for the notification channel, assigned by SigNoz.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -223,40 +222,15 @@ func (r *notificationChannelResource) Create(ctx context.Context, req resource.C
 		return
 	}
 
-	var channel *model.NotificationChannel
-	var err error
+	tflog.Debug(ctx, "Creating notification channel", map[string]any{"name": payload.Name})
 
-	// If an ID is provided (e.g., from Crossplane external-name), adopt the
-	// existing channel by updating it instead of creating a new one.
-	if !plan.ID.IsNull() && !plan.ID.IsUnknown() && plan.ID.ValueString() != "" {
-		existingID := plan.ID.ValueString()
-		tflog.Debug(ctx, "Adopting existing channel", map[string]any{"id": existingID})
-
-		err = r.client.UpdateChannel(ctx, existingID, payload)
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error adopting notification channel",
-				fmt.Sprintf("Could not adopt channel %q: %s", existingID, err.Error()),
-			)
-			return
-		}
-
-		channel, err = r.client.GetChannel(ctx, existingID)
-		if err != nil {
-			addErr(&resp.Diagnostics, err, operationCreate, SigNozNotificationChannel)
-			return
-		}
-	} else {
-		tflog.Debug(ctx, "Creating notification channel", map[string]any{"name": payload.Name})
-
-		channel, err = r.client.CreateChannel(ctx, payload)
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error creating notification channel",
-				"Could not create notification channel: "+err.Error(),
-			)
-			return
-		}
+	channel, err := r.client.CreateChannel(ctx, payload)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error creating notification channel",
+			"Could not create notification channel: "+err.Error(),
+		)
+		return
 	}
 
 	mapChannelToState(ctx, channel, &plan, &resp.Diagnostics)
@@ -272,6 +246,12 @@ func (r *notificationChannelResource) Read(ctx context.Context, req resource.Rea
 	var state notificationChannelResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if state.ID.ValueString() == "" || state.ID.IsNull() {
+		tflog.Warn(ctx, "Notification channel ID is empty, removing from state to trigger re-creation")
+		resp.State.RemoveResource(ctx)
 		return
 	}
 

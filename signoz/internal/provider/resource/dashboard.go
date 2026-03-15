@@ -153,12 +153,9 @@ func (r *dashboardResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				},
 			},
 
-			// ID is computed by default but can be optionally provided to adopt
-			// an existing SigNoz dashboard (e.g., via Crossplane external-name).
 			attr.ID: schema.StringAttribute{
-				Optional:    true,
 				Computed:    true,
-				Description: "Unique ID for the dashboard. If provided during creation, the provider will adopt the existing dashboard instead of creating a new one.",
+				Description: "Unique ID for the dashboard, assigned by SigNoz.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -263,88 +260,68 @@ func (r *dashboardResource) Create(ctx context.Context, req resource.CreateReque
 		return true
 	}
 
-	// If an ID is provided (e.g., from Crossplane external-name), adopt the
-	// existing dashboard by updating it instead of creating a new one.
-	if !plan.ID.IsNull() && !plan.ID.IsUnknown() && plan.ID.ValueString() != "" {
-		existingID := plan.ID.ValueString()
-		tflog.Debug(ctx, "Adopting existing dashboard", map[string]any{"id": existingID})
+	tflog.Debug(ctx, "Creating dashboard", map[string]any{"dashboard": dashboardPayload})
 
-		err = r.client.UpdateDashboard(ctx, existingID, dashboardPayload)
-		if err != nil {
+	dashboard, createErr := r.client.CreateDashboard(ctx, dashboardPayload)
+	if createErr != nil {
+		resp.Diagnostics.AddError(
+			"Error creating dashboard",
+			"Could not create dashboard, unexpected error: "+createErr.Error(),
+		)
+		return
+	}
+
+	tflog.Debug(ctx, "Created dashboard", map[string]any{"dashboard": dashboard})
+
+	// Verify the returned UUID actually belongs to this dashboard.
+	// SigNoz uses UUIDv7 (timestamp-based) and can return identical UUIDs
+	// for dashboards created in the same millisecond, causing one to
+	// silently overwrite the other. Detect this by checking that the
+	// dashboard at the returned UUID has the expected title.
+	verifyDashboard, verifyErr := r.client.GetDashboard(ctx, dashboard.ID)
+	if verifyErr != nil {
+		resp.Diagnostics.AddError(
+			"Error verifying dashboard",
+			fmt.Sprintf("Could not verify dashboard %q after creation: %s", dashboard.ID, verifyErr.Error()),
+		)
+		return
+	}
+	if verifyDashboard.Data.Title != dashboardPayload.Title {
+		// UUID collision detected — another dashboard was created with the
+		// same UUID. Delete the collided dashboard and retry once.
+		tflog.Warn(ctx, "UUID collision detected: dashboard at returned UUID has different title, retrying create",
+			map[string]any{
+				"collidedID":    dashboard.ID,
+				"expectedTitle": dashboardPayload.Title,
+				"actualTitle":   verifyDashboard.Data.Title,
+			})
+
+		// Sleep to ensure the next UUIDv7 gets a different timestamp.
+		time.Sleep(10 * time.Millisecond)
+
+		retryDashboard, retryErr := r.client.CreateDashboard(ctx, dashboardPayload)
+		if retryErr != nil {
 			resp.Diagnostics.AddError(
-				"Error adopting dashboard",
-				fmt.Sprintf("Could not adopt dashboard %q, unexpected error: %s", existingID, err.Error()),
+				"Error creating dashboard (retry after UUID collision)",
+				"Could not create dashboard on retry: "+retryErr.Error(),
 			)
 			return
 		}
 
-		if !readBackState(existingID) {
-			return
-		}
-	} else {
-		tflog.Debug(ctx, "Creating dashboard", map[string]any{"dashboard": dashboardPayload})
-
-		dashboard, createErr := r.client.CreateDashboard(ctx, dashboardPayload)
-		if createErr != nil {
+		if retryDashboard.ID == dashboard.ID {
 			resp.Diagnostics.AddError(
-				"Error creating dashboard",
-				"Could not create dashboard, unexpected error: "+createErr.Error(),
+				"UUID collision persists",
+				fmt.Sprintf("SigNoz returned the same UUID %q on retry. This is a SigNoz server bug — dashboard creates within the same timestamp get identical UUIDs.", dashboard.ID),
 			)
 			return
 		}
 
-		tflog.Debug(ctx, "Created dashboard", map[string]any{"dashboard": dashboard})
+		dashboard = retryDashboard
+		tflog.Info(ctx, "Retry succeeded with new UUID", map[string]any{"newID": dashboard.ID})
+	}
 
-		// Verify the returned UUID actually belongs to this dashboard.
-		// SigNoz uses UUIDv7 (timestamp-based) and can return identical UUIDs
-		// for dashboards created in the same millisecond, causing one to
-		// silently overwrite the other. Detect this by checking that the
-		// dashboard at the returned UUID has the expected title.
-		verifyDashboard, verifyErr := r.client.GetDashboard(ctx, dashboard.ID)
-		if verifyErr != nil {
-			resp.Diagnostics.AddError(
-				"Error verifying dashboard",
-				fmt.Sprintf("Could not verify dashboard %q after creation: %s", dashboard.ID, verifyErr.Error()),
-			)
-			return
-		}
-		if verifyDashboard.Data.Title != dashboardPayload.Title {
-			// UUID collision detected — another dashboard was created with the
-			// same UUID. Delete the collided dashboard and retry once.
-			tflog.Warn(ctx, "UUID collision detected: dashboard at returned UUID has different title, retrying create",
-				map[string]any{
-					"collidedID":    dashboard.ID,
-					"expectedTitle": dashboardPayload.Title,
-					"actualTitle":   verifyDashboard.Data.Title,
-				})
-
-			// Sleep to ensure the next UUIDv7 gets a different timestamp.
-			time.Sleep(10 * time.Millisecond)
-
-			retryDashboard, retryErr := r.client.CreateDashboard(ctx, dashboardPayload)
-			if retryErr != nil {
-				resp.Diagnostics.AddError(
-					"Error creating dashboard (retry after UUID collision)",
-					"Could not create dashboard on retry: "+retryErr.Error(),
-				)
-				return
-			}
-
-			if retryDashboard.ID == dashboard.ID {
-				resp.Diagnostics.AddError(
-					"UUID collision persists",
-					fmt.Sprintf("SigNoz returned the same UUID %q on retry. This is a SigNoz server bug — dashboard creates within the same timestamp get identical UUIDs.", dashboard.ID),
-				)
-				return
-			}
-
-			dashboard = retryDashboard
-			tflog.Info(ctx, "Retry succeeded with new UUID", map[string]any{"newID": dashboard.ID})
-		}
-
-		if !readBackState(dashboard.ID) {
-			return
-		}
+	if !readBackState(dashboard.ID) {
+		return
 	}
 
 	// Set state to populated data.
@@ -360,6 +337,12 @@ func (r *dashboardResource) Read(ctx context.Context, req resource.ReadRequest, 
 	var diag diag.Diagnostics
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if state.ID.ValueString() == "" || state.ID.IsNull() {
+		tflog.Warn(ctx, "Dashboard ID is empty, removing from state to trigger re-creation")
+		resp.State.RemoveResource(ctx)
 		return
 	}
 
