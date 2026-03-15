@@ -445,6 +445,14 @@ func (r *alertResource) Read(ctx context.Context, req resource.ReadRequest, resp
 
 	tflog.Debug(ctx, "Reading alert", map[string]any{"alert": state.ID.ValueString()})
 
+	// If the alert ID is empty, the resource doesn't exist in SigNoz.
+	// Remove it from state so Terraform will re-create it.
+	if state.ID.ValueString() == "" || state.ID.IsNull() {
+		tflog.Warn(ctx, "Alert ID is empty, removing from state to trigger re-creation")
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
 	// Get refreshed alert from SigNoz.
 	alert, err := r.client.GetAlert(ctx, state.ID.ValueString())
 	if err != nil {
