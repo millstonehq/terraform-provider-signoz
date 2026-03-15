@@ -374,11 +374,18 @@ func (r *alertResource) Create(ctx context.Context, req resource.CreateRequest, 
 	plan.UpdateAt = types.StringValue(alert.UpdateAt)
 	plan.UpdateBy = types.StringValue(alert.UpdateBy)
 
-	//As condition is JSON string, updated response contains extra keys
-	plan.Condition, err = alertPayload.ConditionToTerraform()
+	// Condition is JSON — the API may reorder keys. If the API response is
+	// semantically identical to what we sent, preserve the plan's value to
+	// avoid "inconsistent result after apply" errors from key reordering.
+	serverCondition, err := alertPayload.ConditionToTerraform()
 	if err != nil {
 		addErr(&resp.Diagnostics, err, operationCreate, SigNozAlert)
 		return
+	}
+	if semanticallyEqualJSON(plan.Condition.ValueString(), serverCondition.ValueString()) {
+		// Keep plan value — semantically identical, just different key order.
+	} else {
+		plan.Condition = serverCondition
 	}
 
 	var diagLabels diag.Diagnostics
@@ -389,10 +396,11 @@ func (r *alertResource) Create(ctx context.Context, req resource.CreateRequest, 
 		plan.NotificationSettings, diagLabels = alert.NotificationSettingsToTerraform(ctx)
 		resp.Diagnostics.Append(diagLabels...)
 
-		var evalErr error
-		plan.Evaluation, evalErr = alert.EvaluationToTerraform()
+		serverEval, evalErr := alert.EvaluationToTerraform()
 		if evalErr != nil {
 			addErr(&resp.Diagnostics, evalErr, operationCreate, SigNozAlert)
+		} else if !semanticallyEqualJSON(plan.Evaluation.ValueString(), serverEval.ValueString()) {
+			plan.Evaluation = serverEval
 		}
 	} else {
 		plan.NotificationSettings = types.ObjectNull(
@@ -592,11 +600,18 @@ func (r *alertResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	plan.UpdateAt = types.StringValue(alert.UpdateAt)
 	plan.UpdateBy = types.StringValue(alert.UpdateBy)
 
-	//As condition is JSON string, updated response contains extra keys
-	plan.Condition, err = alertUpdate.ConditionToTerraform()
+	// Condition is JSON — the API may reorder keys. If the API response is
+	// semantically identical to what we sent, preserve the plan's value to
+	// avoid "inconsistent result after apply" errors from key reordering.
+	serverCondition, err := alertUpdate.ConditionToTerraform()
 	if err != nil {
 		addErr(&resp.Diagnostics, err, operationUpdate, SigNozAlert)
 		return
+	}
+	if semanticallyEqualJSON(plan.Condition.ValueString(), serverCondition.ValueString()) {
+		// Keep plan value — semantically identical, just different key order.
+	} else {
+		plan.Condition = serverCondition
 	}
 
 	var diagLabelsUpdate diag.Diagnostics
@@ -615,10 +630,13 @@ func (r *alertResource) Update(ctx context.Context, req resource.UpdateRequest, 
 			return
 		}
 
-		plan.Evaluation, err = alert.EvaluationToTerraform()
-		if err != nil {
-			addErr(&resp.Diagnostics, err, operationUpdate, SigNozAlert)
+		serverEval, evalErr := alert.EvaluationToTerraform()
+		if evalErr != nil {
+			addErr(&resp.Diagnostics, evalErr, operationUpdate, SigNozAlert)
 			return
+		}
+		if !semanticallyEqualJSON(plan.Evaluation.ValueString(), serverEval.ValueString()) {
+			plan.Evaluation = serverEval
 		}
 	} else {
 		plan.NotificationSettings = types.ObjectNull(
