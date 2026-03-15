@@ -150,9 +150,13 @@ func (r *notificationChannelResource) Schema(_ context.Context, _ resource.Schem
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
 						attr.ApiUrl: schema.StringAttribute{
-							Required:    true,
+							Optional:    true,
+							Computed:    true,
 							Sensitive:   true,
 							Description: "Slack incoming webhook URL.",
+							PlanModifiers: []planmodifier.String{
+								stringplanmodifier.UseStateForUnknown(),
+							},
 						},
 						attr.Channel: schema.StringAttribute{
 							Optional:    true,
