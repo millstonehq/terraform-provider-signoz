@@ -297,16 +297,14 @@ func (r *notificationChannelResource) Update(ctx context.Context, req resource.U
 		return
 	}
 
-	channel, err := r.client.GetChannel(ctx, state.ID.ValueString())
-	if err != nil {
-		addErr(&resp.Diagnostics, err, operationUpdate, SigNozNotificationChannel)
-		return
-	}
-
-	mapChannelToState(ctx, channel, &plan, &resp.Diagnostics)
-	if resp.Diagnostics.HasError() {
-		return
-	}
+	// Use plan values for state instead of re-reading from API.
+	// SigNoz may omit sensitive nested blocks (e.g. slack_configs with api_url)
+	// from GET responses, causing "block count changed from 1 to 0" errors.
+	// The plan already represents the desired state, and the update succeeded.
+	plan.ID = state.ID
+	plan.Type = state.Type
+	plan.CreatedAt = state.CreatedAt
+	plan.UpdatedAt = state.UpdatedAt
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
