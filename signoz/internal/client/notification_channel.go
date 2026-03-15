@@ -127,19 +127,23 @@ func (c *Client) UpdateChannel(ctx context.Context, channelID string, payload *m
 		return err
 	}
 
-	var bodyObj signozResponse
-	err = json.Unmarshal(body, &bodyObj)
-	if err != nil {
-		return err
-	}
+	// Some SigNoz versions return empty body on successful PUT.
+	// doRequest already verified 2xx status, so treat empty body as success.
+	if len(body) > 0 {
+		var bodyObj signozResponse
+		err = json.Unmarshal(body, &bodyObj)
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal update channel response: %w (body: %s)", err, truncateStr(string(body), 500))
+		}
 
-	if bodyObj.Status != "success" || bodyObj.Error != "" {
-		tflog.Error(ctx, "UpdateChannel: error while updating channel", map[string]any{
-			"error":     bodyObj.Error,
-			"errorType": bodyObj.ErrorType,
-			"data":      bodyObj.Data,
-		})
-		return fmt.Errorf("error while updating channel: %s", bodyObj.Error)
+		if bodyObj.Status != "success" || bodyObj.Error != "" {
+			tflog.Error(ctx, "UpdateChannel: error while updating channel", map[string]any{
+				"error":     bodyObj.Error,
+				"errorType": bodyObj.ErrorType,
+				"data":      bodyObj.Data,
+			})
+			return fmt.Errorf("error while updating channel: %s", bodyObj.Error)
+		}
 	}
 
 	tflog.Debug(ctx, "UpdateChannel: channel updated", map[string]any{"channelID": channelID})
